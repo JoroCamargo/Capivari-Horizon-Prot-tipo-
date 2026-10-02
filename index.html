@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Capivari Horizon — Protótipo 3D</title>
+<style>
+  :root{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#fff}
+  *{box-sizing:border-box} html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0b1016}
+  #game{position:fixed;inset:0} canvas{display:block}
+  .hud{position:fixed;inset:0;pointer-events:none}
+  .panel{background:rgba(8,12,18,.72);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.12);border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+  #topLeft{position:absolute;left:14px;top:14px;padding:12px 14px;min-width:220px}
+  #topLeft .title{font-weight:800;letter-spacing:.5px}
+  #topLeft .sub{font-size:12px;opacity:.7;margin-top:3px}
+  #race{position:absolute;right:14px;top:14px;padding:12px 14px;text-align:right;min-width:155px}
+  #race .big{font-size:28px;font-weight:900;line-height:1}
+  #race .muted{font-size:11px;opacity:.7}
+  #speed{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);text-align:center;text-shadow:0 3px 12px #000}
+  #speed .num{font-size:54px;font-weight:900;line-height:.9}
+  #speed .unit{font-size:11px;letter-spacing:2px;opacity:.75}
+  #mini{position:absolute;right:14px;bottom:14px;width:170px;height:170px;overflow:hidden}
+  #mini canvas{width:100%;height:100%}
+  #message{position:absolute;left:50%;top:22%;transform:translate(-50%,-50%);font-size:38px;font-weight:900;text-align:center;text-shadow:0 4px 20px #000;opacity:0;transition:.25s}
+  #startScreen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 35%,#20384d 0,#0a0e14 65%);z-index:20}
+  #startCard{width:min(620px,calc(100% - 28px));padding:28px}
+  #startCard h1{margin:0;font-size:42px;line-height:1}
+  #startCard p{opacity:.75;line-height:1.5}
+  button{border:0;border-radius:10px;padding:12px 16px;font-weight:800;cursor:pointer;background:#fff;color:#111}
+  button.secondary{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.12)}
+  #carSelect{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}
+  .carBtn{font-size:12px;padding:9px 10px}
+  .carBtn.active{outline:2px solid #fff}
+  #touch{position:fixed;inset:auto 0 0 0;height:190px;display:none;pointer-events:none;z-index:10}
+  .touchBtn{pointer-events:auto;position:absolute;width:72px;height:72px;border-radius:50%;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font-size:24px;display:grid;place-items:center;user-select:none;touch-action:none}
+  #left{left:22px;bottom:30px} #right{left:108px;bottom:30px} #brake{right:108px;bottom:30px} #gas{right:22px;bottom:30px}
+  @media (max-width:700px){
+    #topLeft{min-width:170px}.panel{border-radius:11px}
+    #topLeft .sub{display:none} #mini{width:125px;height:125px}
+    #touch{display:block} #speed{bottom:88px} #speed .num{font-size:44px}
+    #message{font-size:28px}
+  }
+</style>
+</head>
+<body>
+<div id="game"></div>
+
+<div class="hud">
+  <div id="topLeft" class="panel"><div class="title">CAPIVARI HORIZON</div><div class="sub" id="district">Centro</div></div>
+  <div id="race" class="panel"><div class="big" id="pos">1º/8</div><div class="muted" id="lap">CHECKPOINT 1/12</div></div>
+  <div id="speed"><div class="num" id="speedNum">0</div><div class="unit">KM/H</div></div>
+  <div id="message"></div>
+  <div id="mini" class="panel"><canvas id="mapCanvas" width="340" height="340"></canvas></div>
+</div>
+
+<div id="startScreen">
+  <div id="startCard" class="panel">
+    <h1>Capivari Horizon</h1>
+    <p>Protótipo de corrida 3D em mundo aberto inspirado na malha urbana de Capivari-SP. O mapa é procedural e usa vias/bairros públicos como referência; não é uma reprodução cadastral 1:1.</p>
+    <div><strong>Escolha seu veículo</strong></div>
+    <div id="carSelect"></div>
+    <button id="startBtn">INICIAR CORRIDA</button>
+    <button id="freeBtn" class="secondary">PASSEIO LIVRE</button>
+    <p style="font-size:12px;margin-bottom:0">PC: WASD / setas • Espaço: freio • R: reiniciar • Mobile: controles na tela</p>
+  </div>
+</div>
+
+<div id="touch">
+  <div id="left" class="touchBtn">◀</div><div id="right" class="touchBtn">▶</div>
+  <div id="brake" class="touchBtn">●</div><div id="gas" class="touchBtn">▲</div>
+</div>
+
+<script type="importmap">
+{
+  "imports":{
+    "three":"https://cdn.jsdelivr.net/npm/three@0.185.0/build/three.module.js",
+    "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.185.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { WebGL } from 'three/addons/capabilities/WebGL.js';
+
+const DATA_URL = './data/capivari.json';
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const lerp=(a,b,t)=>a+(b-a)*t;
+const rand=(a,b)=>a+Math.random()*(b-a);
+
+let DATA;
+try { DATA=await fetch(DATA_URL).then(r=>r.json()); } catch(e) {
+  document.querySelector('#startCard p').textContent='Falha ao carregar data/capivari.json. Rode o projeto por um servidor HTTP local.';
+  throw e;
+}
+if(!WebGL.isWebGL2Available()){
+  document.body.innerHTML='';
+  document.body.appendChild(WebGL.getWebGL2ErrorMessage());
+  throw new Error('WebGL2 indisponível');
+}
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x8fb6d0);
+scene.fog=new THREE.Fog(0x8fb6d0,180,720);
+
+const camera=new THREE.PerspectiveCamera(62,innerWidth/innerHeight,.1,1400);
+const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.75));
+renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+document.querySelector('#game').appendChild(renderer.domElement);
+
+const hemi=new THREE.HemisphereLight(0xdff3ff,0x6b5c48,2.1); scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xffffff,3.0); sun.position.set(180,260,100); sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048); sun.shadow.camera.left=-450;sun.shadow.camera.right=450;sun.shadow.camera.top=450;sun.shadow.camera.bottom=-450;scene.add(sun);
+
+const world=new THREE.Group(); scene.add(world);
+const roads=new THREE.Group(), buildings=new THREE.Group(), props=new THREE.Group(), cars=new THREE.Group();
+world.add(roads,buildings,props,cars);
+
+const roadMeshes=[];
+const roadWidth=DATA.roadWidth||8;
+
+function box(w,h,d,color,x,y,z,group=props){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),new THREE.MeshStandardMaterial({color,roughness:.82}));
+  m.position.set(x,y,z); m.castShadow=true;m.receiveShadow=true;group.add(m);return m;
+}
+function road(a,b,width=roadWidth){
+  const ax=a[0],az=a[1],bx=b[0],bz=b[1];
+  const dx=bx-ax,dz=bz-az,L=Math.hypot(dx,dz);
+  const m=new THREE.Mesh(new THREE.BoxGeometry(width,.08,L),new THREE.MeshStandardMaterial({color:0x24282b,roughness:.95}));
+  m.position.set((ax+bx)/2,.04,(az+bz)/2);m.rotation.y=Math.atan2(dx,dz);m.receiveShadow=true;roads.add(m);
+  roadMeshes.push({a,b,width,L,m});
+  // dashed center
+  for(let t=10;t<L-5;t+=18){
+    const q=t/L; const x=lerp(ax,bx,q),z=lerp(az,bz,q);
+    const d=new THREE.Mesh(new THREE.BoxGeometry(.12,.10,7),new THREE.MeshBasicMaterial({color:0xd7d7a5}));
+    d.position.set(x,.1,z);d.rotation.y=m.rotation.y;roads.add(d);
+  }
+}
+for(const r of DATA.roads) road(r.a,r.b,r.width||roadWidth);
+
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(1400,1400),new THREE.MeshStandardMaterial({color:0x66715d,roughness:1}));
+ground.rotation.x=-Math.PI/2;ground.position.y=-.04;ground.receiveShadow=true;world.add(ground);
+
+// Block-like buildings generated from neighborhood polygons/anchors.
+const districtColors=[0xb7a78f,0xa9b2a2,0xc1a98e,0x9ea9b8,0xbda28f,0xa6aa96];
+DATA.districts.forEach((d,di)=>{
+  const [cx,cz]=d.center;
+  const radius=d.radius;
+  for(let i=0;i<d.buildings;i++){
+    const ang=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*radius;
+    const x=cx+Math.cos(ang)*rr, z=cz+Math.sin(ang)*rr;
+    if(Math.hypot(x-cx,z-cz)<10) continue;
+    const w=rand(6,16), dep=rand(7,18), h=rand(3.2,9);
+    const mat=new THREE.MeshStandardMaterial({color:districtColors[di%districtColors.length],roughness:.9});
+    const b=new THREE.Mesh(new THREE.BoxGeometry(w,h,dep),mat);
+    b.position.set(x,h/2,z); b.rotation.y=Math.random()*Math.PI; b.castShadow=true;b.receiveShadow=true;buildings.add(b);
+  }
+});
+
+// Vegetation / lamps for visual density.
+for(let i=0;i<380;i++){
+  const x=rand(-430,430),z=rand(-390,390);
+  const trunk=box(.35,2.2,.35,0x5d412d,x,1.1,z);
+  const crown=new THREE.Mesh(new THREE.IcosahedronGeometry(rand(1.6,3.0),1),new THREE.MeshStandardMaterial({color:0x2f6a3d,roughness:1}));
+  crown.position.set(x,3.1,z);crown.castShadow=true;props.add(crown);
+}
+for(let i=0;i<90;i++){
+  const x=rand(-350,350),z=rand(-320,320);
+  const pole=box(.12,5,.12,0x252525,x,2.5,z);
+  box(1.0,.15,.25,0xf3e7ad,x,5,z);
+}
+
+// Simple river/córrego visual reference.
+const river=new THREE.Mesh(new THREE.PlaneGeometry(36,1000),new THREE.MeshStandardMaterial({color:0x4d92b5,roughness:.2,metalness:.1}));
+river.rotation.x=-Math.PI/2;river.position.set(DATA.river.x,0,DATA.river.z);river.rotation.z=DATA.river.angle;world.add(river);
+
+// Vehicle data: 20 distinct vehicles.
+const VEHICLES=[
+["Corsa GSi",155,205,78,42,0.92,0xe74c3c],["Gol Turbo",150,198,82,44,0.90,0x2ecc71],
+["Uno Rally",142,188,90,47,0.94,0xf1c40f],["Civic Type-R",172,245,72,39,0.87,0xffffff],
+["Supra",180,285,66,36,0.82,0xff8c42],["GT-R",185,300,63,35,0.80,0x566573],
+["Mustang",178,270,69,37,0.83,0x7d3cff],["Camaro",176,265,71,38,0.84,0xf39c12],
+["Corvette",188,310,60,33,0.78,0x1abc9c],["911 Carrera",182,292,64,34,0.81,0xe91e63],
+["Huracán",195,325,56,31,0.74,0x00bcd4],["R8",190,318,59,32,0.76,0x9b59b6],
+["Supra GR",177,275,68,36,0.82,0xd35400],["WRX STI",165,235,75,41,0.88,0x2980b9],
+["Lancer Evo",168,242,74,40,0.86,0x34495e],["Golf R",164,238,77,41,0.89,0x16a085],
+["RS3",169,252,73,39,0.86,0x95a5a6],["M3",174,268,70,37,0.84,0x3498db],
+["Charger",170,260,74,40,0.83,0xc0392b],["Porsche GT3",193,318,58,31,0.76,0xf5f5f5]
+].map((v,i)=>({id:i,name:v[0],hp:v[1],top:v[2],acc:v[3],grip:v[4],drag:v[5],color:v[6]}));
+
+function carMesh(spec,scale=1){
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(new THREE.BoxGeometry(2.0*scale,.52*scale,4.15*scale),new THREE.MeshStandardMaterial({color:spec.color,metalness:.35,roughness:.35}));
+  body.position.y=.55*scale;body.castShadow=true;g.add(body);
+  const cabin=new THREE.Mesh(new THREE.BoxGeometry(1.55*scale,.55*scale,1.85*scale),new THREE.MeshStandardMaterial({color:0x15222b,metalness:.1,roughness:.2}));
+  cabin.position.set(0,.93*scale,-.18*scale);cabin.castShadow=true;g.add(cabin);
+  for(const x of[-.92,.92]) for(const z of[-1.35,1.35]){
+    const w=new THREE.Mesh(new THREE.CylinderGeometry(.34*scale,.34*scale,.22*scale,14),new THREE.MeshStandardMaterial({color:0x111111,roughness:1}));
+    w.rotation.z=Math.PI/2;w.position.set(x,.36*scale,z);w.castShadow=true;g.add(w);
+  }
+  return g;
+}
+
+let selected=0;
+const sel=document.querySelector('#carSelect');
+VEHICLES.forEach((v,i)=>{
+  const b=document.createElement('button');b.className='carBtn secondary';b.textContent=v.name;
+  b.onclick=()=>{selected=i;document.querySelectorAll('.carBtn').forEach(x=>x.classList.remove('active'));b.classList.add('active');};
+  sel.appendChild(b);
+});
+sel.firstChild.classList.add('active');
+
+const player={mesh:null,spec:null,pos:new THREE.Vector3(),vel:new THREE.Vector3(),heading:0,speed:0};
+const opponents=[];
+const keys={};
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='r') resetRace();});
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+
+const touchState={left:false,right:false,gas:false,brake:false};
+function bindTouch(id,key){
+  const el=document.getElementById(id);
+  const on=(e,v)=>{e.preventDefault();touchState[key]=v};
+  el.addEventListener('pointerdown',e=>on(e,true));el.addEventListener('pointerup',e=>on(e,false));el.addEventListener('pointercancel',e=>on(e,false));el.addEventListener('pointerleave',e=>on(e,false));
+}
+bindTouch('left','left');bindTouch('right','right');bindTouch('gas','gas');bindTouch('brake','brake');
+
+let racing=false,freeRide=false,checkpoint=0,lastTime=performance.now(),raceTime=0;
+const checkpoints=DATA.checkpoints.map(p=>new THREE.Vector3(p[0],0,p[1]));
+
+function nearestRoadPoint(p){
+  let best=null,bd=Infinity;
+  for(const r of roadMeshes){
+    const ax=r.a[0],az=r.a[1],bx=r.b[0],bz=r.b[1],dx=bx-ax,dz=bz-az;
+    const t=clamp(((p.x-ax)*dx+(p.z-az)*dz)/(dx*dx+dz*dz),0,1);
+    const q=new THREE.Vector3(ax+dx*t,0,az+dz*t);const d=q.distanceToSquared(p);
+    if(d<bd){bd=d;best=q;}
+  }
+  return {point:best,distance:Math.sqrt(bd)};
+}
+function createRaceCars(){
+  opponents.splice(0); while(cars.children.length) cars.remove(cars.children[0]);
+  player.spec=VEHICLES[selected];player.mesh=carMesh(player.spec,1);cars.add(player.mesh);
+  player.pos.set(checkpoints[0].x,0.02,checkpoints[0].z);player.heading=0;player.speed=0;
+  for(let i=0;i<7;i++){
+    const spec=VEHICLES[(selected+i+1)%VEHICLES.length],m=carMesh(spec,.96);
+    const o={mesh:m,spec,pos:new THREE.Vector3(checkpoints[0].x+(i-3)*4,.02,checkpoints[0].z+10+i*4),speed:0,cp:0,offset:(i-3)*2.5,skill:rand(.82,1.02)};
+    m.position.copy(o.pos);cars.add(m);opponents.push(o);
+  }
+}
+function resetRace(){
+  checkpoint=0;raceTime=0;createRaceCars();showMessage('3');setTimeout(()=>showMessage('2'),500);setTimeout(()=>showMessage('1'),1000);setTimeout(()=>showMessage('GO!'),1500);
+}
+function showMessage(t){const m=document.querySelector('#message');m.textContent=t;m.style.opacity=1;clearTimeout(showMessage.t);showMessage.t=setTimeout(()=>m.style.opacity=0,550)}
+
+function start(mode){
+  freeRide=mode==='free';racing=!freeRide;document.querySelector('#startScreen').style.display='none';
+  createRaceCars();checkpoint=0;raceTime=0;if(racing){showMessage('3');setTimeout(()=>showMessage('2'),500);setTimeout(()=>showMessage('1'),1000);setTimeout(()=>showMessage('GO!'),1500)}
+}
+document.querySelector('#startBtn').onclick=()=>start('race');
+document.querySelector('#freeBtn').onclick=()=>start('free');
+
+function updatePlayer(dt){
+  const gas=keys.w||keys.arrowup||touchState.gas, brake=keys.s||keys.arrowdown||touchState.brake;
+  const left=keys.a||keys.arrowleft||touchState.left, right=keys.d||keys.arrowright||touchState.right;
+  const steer=(right?1:0)-(left?1:0);
+  const max=player.spec.top/3.6, acc=player.spec.acc/45;
+  if(gas) player.speed+=acc*dt*8; else player.speed-=player.spec.drag*dt*2.4;
+  if(brake) player.speed-=12*dt;
+  player.speed=clamp(player.speed,0,max);
+  const steerStrength=(.7+player.speed/max)*1.9;
+  player.heading-=steer*steerStrength*dt*(player.speed/max);
+  const forward=new THREE.Vector3(Math.sin(player.heading),0,Math.cos(player.heading));
+  player.vel.copy(forward).multiplyScalar(player.speed);
+  player.pos.addScaledVector(player.vel,dt);
+  const roadInfo=nearestRoadPoint(player.pos);
+  if(roadInfo.distance>18) player.speed*=Math.pow(.72,dt*10);
+  player.mesh.position.copy(player.pos);player.mesh.rotation.y=player.heading;
+  if(racing){
+    const target=checkpoints[checkpoint];
+    if(player.pos.distanceTo(target)<12){
+      checkpoint=(checkpoint+1)%checkpoints.length;
+      showMessage(checkpoint===0?'VOLTA!':'CHECKPOINT');
+    }
+  }
+}
+function updateOpponents(dt){
+  for(const o of opponents){
+    const target=checkpoints[o.cp];
+    const to=new THREE.Vector3(target.x-o.pos.x,0,target.z-o.pos.z);
+    if(to.length()<12)o.cp=(o.cp+1)%checkpoints.length;
+    to.normalize();
+    const desired=Math.atan2(to.x,to.z);
+    let diff=Math.atan2(Math.sin(desired-o.mesh.rotation.y),Math.cos(desired-o.mesh.rotation.y));
+    o.mesh.rotation.y+=clamp(diff,-2.4*dt,2.4*dt);
+    const max=o.spec.top/3.6*o.skill;
+    o.speed=lerp(o.speed,max,Math.min(1,dt*.7));
+    o.pos.x+=Math.sin(o.mesh.rotation.y)*o.speed*dt;
+    o.pos.z+=Math.cos(o.mesh.rotation.y)*o.speed*dt;
+    o.mesh.position.copy(o.pos);
+  }
+}
+function updateCamera(dt){
+  const f=new THREE.Vector3(Math.sin(player.heading),0,Math.cos(player.heading));
+  const target=player.pos.clone().add(new THREE.Vector3(0,2.0,0));
+  const desired=player.pos.clone().addScaledVector(f,-11).add(new THREE.Vector3(0,5.2,0));
+  camera.position.lerp(desired,1-Math.pow(.001,dt));camera.lookAt(target);
+}
+function updateHUD(){
+  document.querySelector('#speedNum').textContent=Math.round(player.speed*3.6);
+  const d=DATA.districts.reduce((best,d)=>player.pos.distanceTo(new THREE.Vector3(d.center[0],0,d.center[1]))<best.dist?{name:d.name,dist:player.pos.distanceTo(new THREE.Vector3(d.center[0],0,d.center[1]))}:best,{name:'Capivari',dist:Infinity});
+  document.querySelector('#district').textContent=d.name;
+  document.querySelector('#lap').textContent=racing?`CHECKPOINT ${checkpoint+1}/${checkpoints.length}`:'PASSEIO LIVRE';
+  const all=[{p:player.pos,cp:checkpoint},...opponents.map(o=>({p:o.pos,cp:o.cp}))];
+  const score=x=>x.cp*100000-x.p.distanceTo(checkpoints[x.cp]);
+  const rank=1+all.slice(1).filter(x=>score(x)>score(all[0])).length;
+  document.querySelector('#pos').textContent=`${rank}º/8`;
+  drawMini();
+}
+const mini=document.querySelector('#mapCanvas'),ctx=mini.getContext('2d');
+function drawMini(){
+  ctx.clearRect(0,0,340,340);ctx.fillStyle='#1a2228';ctx.fillRect(0,0,340,340);
+  const S=0.37, ox=170,oz=170;
+  ctx.lineWidth=3;ctx.strokeStyle='#555';
+  for(const r of roadMeshes){ctx.beginPath();ctx.moveTo(ox+r.a[0]*S,oz+r.a[1]*S);ctx.lineTo(ox+r.b[0]*S,oz+r.b[1]*S);ctx.stroke();}
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(ox+player.pos.x*S,oz+player.pos.z*S,5,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#e74c3c';for(const o of opponents){ctx.beginPath();ctx.arc(ox+o.pos.x*S,oz+o.pos.z*S,3,0,Math.PI*2);ctx.fill();}
+}
+
+function animate(now){
+  requestAnimationFrame(animate);const dt=Math.min(.033,(now-lastTime)/1000);lastTime=now;
+  if(racing||freeRide){updatePlayer(dt);updateOpponents(dt);updateCamera(dt);updateHUD();raceTime+=dt}
+  renderer.render(scene,camera);
+}
+requestAnimationFrame(animate);
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+</script>
+</body>
+</html>
